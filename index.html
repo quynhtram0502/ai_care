@@ -1,0 +1,155 @@
+ <!DOCTYPE html>
+<html lang="vi">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>AI Care - Nhận diện cảm xúc học sinh</title>
+
+  <!-- Thư viện TensorFlow.js và Teachable Machine -->
+  <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@3.20.0/dist/tf.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@teachablemachine/image@0.8.4/dist/teachablemachine-image.min.js"></script>
+
+  <style>
+    body {
+      font-family: "Segoe UI", Tahoma, Arial, sans-serif;
+      background: linear-gradient(180deg,#eaf6ff,#ffffff);
+      margin: 0;
+      padding: 20px;
+      text-align: center;
+      color: #0b3d66;
+    }
+    h1 { margin-top: 6px; }
+    #controls { margin-top: 14px; }
+    button {
+      background:#0077cc;color:#fff;border:none;padding:10px 16px;border-radius:8px;
+      font-size:16px;cursor:pointer;
+    }
+    button:active{transform:translateY(1px);}
+    #webcam-wrapper{ margin-top:18px; display:inline-block; background:#fff; padding:12px; border-radius:12px;
+      box-shadow:0 6px 18px rgba(0,0,0,0.08);
+    }
+    video, canvas { border-radius:8px; }
+    #label-container { margin-top:14px; font-size:18px; background:#fff;padding:12px;border-radius:10px; display:inline-block; min-width:320px; box-shadow:0 4px 12px rgba(0,0,0,0.06); }
+    #status { margin-top:10px; color:#444; font-size:14px; }
+    .hint { margin-top:8px; font-size:13px; color:#666; }
+  </style>
+</head>
+<body>
+  <h1>AI Care — Nhận diện cảm xúc học sinh</h1>
+  <div id="controls">
+    <button id="startBtn">🎥 Bật camera & bắt đầu</button>
+    <button id="stopBtn" style="display:none;margin-left:8px;background:#ff6b6b">⏹ Dừng</button>
+  </div>
+
+  <div id="webcam-wrapper" style="display:none;">
+    <video id="webcam" width="320" height="320" autoplay playsinline></video>
+  </div>
+
+  <div id="label-container">Kết quả sẽ hiển thị ở đây.</div>
+  <div id="status" class="hint">Lưu ý: bạn cần có thư mục <strong>model/</strong> (model.json, metadata.json, .bin) đặt cùng cấp với file này.</div>
+
+  <script>
+    // ĐẶT ĐÚNG TÊN THƯ MỤC MODEL Ở ĐÂY:
+    const MODEL_URL = "model/"; // nếu bạn đổi tên thư mục model thì thay string này
+
+    let model, webcam, maxPredictions;
+    const startBtn = document.getElementById("startBtn");
+    const stopBtn = document.getElementById("stopBtn");
+    const webcamEl = document.getElementById("webcam");
+    const wrapper = document.getElementById("webcam-wrapper");
+    const labelContainer = document.getElementById("label-container");
+    const status = document.getElementById("status");
+
+    startBtn.addEventListener("click", initAndStart);
+    stopBtn.addEventListener("click", stopCamera);
+
+    async function initAndStart() {
+      startBtn.disabled = true;
+      status.innerText = "Đang nạp mô hình... vui lòng chờ.";
+      try {
+        const modelURL = MODEL_URL + "model.json";
+        const metadataURL = MODEL_URL + "metadata.json";
+        model = await tmImage.load(modelURL, metadataURL);
+        maxPredictions = model.getTotalClasses();
+      } catch (err) {
+        status.innerText = "Không tìm thấy mô hình. Hãy chắc thư mục 'model' (model.json, metadata.json, .bin) nằm cùng nơi với index.html.";
+        startBtn.disabled = false;
+        return;
+      }
+
+      // Khởi tạo webcam
+      try {
+        wrapper.style.display = "inline-block";
+        const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
+        webcamEl.srcObject = stream;
+        await new Promise((res) => (webcamEl.onloadedmetadata = res));
+      } catch (err) {
+        status.innerText = "Không mở được camera. Vui lòng cho phép quyền camera hoặc thử trình duyệt khác.";
+        startBtn.disabled = false;
+        return;
+      }
+
+      stopBtn.style.display = "";
+      startBtn.style.display = "none";
+      status.innerText = "Mô hình sẵn sàng. Đang phân tích...";
+
+      // Tạo canvas tạm để gửi vào model
+      window._tmCanvas = document.createElement("canvas");
+      window._tmCanvas.width = 320;
+      window._tmCanvas.height = 320;
+      requestAnimationFrame(loop);
+    }
+
+    async function loop() {
+      // copy frame từ video vào canvas
+      const ctx = window._tmCanvas.getContext("2d");
+      ctx.drawImage(webcamEl, 0, 0, window._tmCanvas.width, window._tmCanvas.height);
+
+      // Dự đoán
+      try {
+        const prediction = await model.predict(window._tmCanvas);
+        prediction.sort((a,b) => b.probability - a.probability);
+        const top = prediction[0];
+        displayResult(top.className, top.probability);
+      } catch (err) {
+        // nếu có lỗi prediction, hiển thị
+        labelContainer.innerText = "Lỗi khi dự đoán: " + (err.message || err);
+      }
+
+      // tiếp tục vòng lặp nếu camera còn bật
+      if (stopBtn.style.display !== "none") {
+        requestAnimationFrame(loop);
+      }
+    }
+
+    function displayResult(className, prob) {
+      const p = Math.round(prob * 100);
+      let text = "";
+      if (className === "Vui") text = `😊 ${p}% — Bạn đang vui, tiếp tục nhé!`;
+      else if (className === "Buồn") text = `😔 ${p}% — Có vẻ bạn buồn. Hãy chia sẻ cùng người tin cậy.`;
+      else if (className === "Căng thẳng") text = `😣 ${p}% — Bạn căng thẳng. Nên nghỉ ngơi vài phút, hít thở sâu.`;
+      else if (className === "Mệt mỏi") text = `😴 ${p}% — Có vẻ mệt mỏi. Uống nước và thư giãn.`;
+      else text = `${className} — ${p}%`;
+
+      labelContainer.innerText = text;
+    }
+
+    function stopCamera() {
+      // dừng stream video
+      const stream = webcamEl.srcObject;
+      if (stream) {
+        const tracks = stream.getTracks();
+        tracks.forEach(track => track.stop());
+      }
+      webcamEl.srcObject = null;
+      stopBtn.style.display = "none";
+      startBtn.style.display = "";
+      startBtn.disabled = false;
+      wrapper.style.display = "none";
+      labelContainer.innerText = "Đã dừng camera.";
+      status.innerText = "Bạn có thể bật lại khi cần.";
+    }
+  </script>
+</body>
+</html>
+const URL = "model/";
